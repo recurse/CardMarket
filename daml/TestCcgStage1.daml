@@ -1,0 +1,71 @@
+daml 1.2
+module TestCcgState1
+where
+
+import CcgStage1
+
+swapTrade : Scenario ()
+swapTrade = do
+    -----------------
+    -- Market Setup
+    -----------------
+
+    -- Set up the participants in the marketplace
+    -- Market operator and regulator/auditor
+    manager <- getParty "I want the money"
+    auditor <- getParty "You cant have it"
+    -- Publishers
+    inlandSorc <- getParty "Inland Sorcerers"
+    nineDisc <- getParty "Nine Disc Publishers"
+    -- Gamers
+    alice <- getParty "Alice"
+    bob <- getParty "Bob"
+
+    -- Setup the market and have the participants join
+    mkp <- manager `submit` create ProposeMarket with manager; auditor
+    market <- auditor `submit` exercise mkp AcceptMarket
+    market <- manager `submit` exercise market InvitePublisher with invitee = inlandSorc
+    market <- manager `submit` exercise market InvitePublisher with invitee = nineDisc
+    market <- inlandSorc `submit` exercise market AcceptPublisher with accepter = inlandSorc
+    market <- nineDisc `submit` exercise market AcceptPublisher with accepter = nineDisc
+    market <- inlandSorc `submit` exercise market InvitePlayer with invitor = inlandSorc; invitee = alice
+    market <- nineDisc `submit` exercise market InvitePlayer with invitor = nineDisc; invitee = bob
+    -- Note: Bob cannot accept on behalf of alice
+    bob `submitMustFail` exercise market AcceptPlayer with accepter = alice
+    market <- alice `submit` exercise market AcceptPlayer with accepter = alice
+    market <- bob `submit` exercise market AcceptPlayer with accepter = bob
+
+    -- Issue two cards to Alice and Bob
+    int <- inlandSorc `submit` exercise market IssueCard with 
+                player = alice
+                description = CardDescription with publisher = inlandSorc; cardText = "Immovable Force"
+    forceId <- alice `submit` exercise int AcceptCard
+    force <- alice `submit` fetch forceId
+
+    int <- nineDisc `submit` exercise market IssueCard with 
+                player = bob
+                description = CardDescription with publisher = nineDisc; cardText = "Iresistable Obect"
+    objectId <- bob `submit` exercise int AcceptCard
+    objectId <- nineDisc `submit` exercise market UpdateCardText with publisher = nineDisc; cardId = objectId; newText = "Irresistable Object"
+    object <- bob `submit` fetch objectId
+
+    ---------------------------------
+    -- Privacy Demonstration Part 1
+    ---------------------------------
+
+    -- Alice doesn't know Bob's cards and vis versa
+    alice `submitMustFail` fetch objectId
+    bob `submitMustFail` fetch forceId
+    -- Publishers know who owns their cards
+    inlandSorc `submit` fetch forceId
+    nineDisc `submit` fetch objectId
+    -- But don't know who owns other cards
+    inlandSorc `submitMustFail` fetch objectId
+    nineDisc `submitMustFail` fetch forceId
+    -- But the manager and auditor can see all ownership
+    manager `submit` fetch forceId
+    manager `submit` fetch objectId
+    auditor `submit` fetch forceId
+    auditor `submit` fetch objectId
+
+    pure ()

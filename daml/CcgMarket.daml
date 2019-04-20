@@ -11,26 +11,26 @@ data CardDescription = CardDescription with
 
 template ProposeMarket
     with
-        registry: Party
+        manager: Party
         auditor: Party
     where
-        signatory registry
-        ensure registry /= auditor
+        signatory manager
+        ensure manager /= auditor
 
         controller auditor can
             AcceptMarket: ContractId Marketplace do
-                create $ Marketplace registry auditor [] [] [] []
+                create $ Marketplace manager auditor [] [] [] []
 
 template Marketplace
     with
-        registry: Party
+        manager: Party
         auditor: Party
         players: [Party]
         publishers: [Party]
         invitedPlayers: [Party]
         invitedPublishers: [Party]
     where
-        signatory registry, auditor
+        signatory manager, auditor
         observer players <> publishers <> invitedPlayers <> invitedPublishers
 
         nonconsuming choice IssueCard: ContractId CardOffer
@@ -40,9 +40,9 @@ template Marketplace
             controller description.publisher
             do
                 assert $ description.publisher `elem` publishers
-                create CardOffer with registry; auditor; owner; description
+                create CardOffer with manager; auditor; owner; description
 
-        controller registry can
+        controller manager can
             nonconsuming SettleSwapObligation: (ContractId Card, ContractId Card)
                 with
                     obligation: ContractId SwapObligation
@@ -87,7 +87,7 @@ template Marketplace
                     players = accepter :: players
                     invitedPlayers = filter ((/=) accepter) invitedPlayers
         
-        controller registry, auditor can
+        controller manager, auditor can
             UpdateCard: ContractId Card
                 with
                     cardId: ContractId Card
@@ -95,7 +95,7 @@ template Marketplace
                     description: CardDescription
                 do
                     card <- fetch cardId
-                    assert $ card.registry == registry
+                    assert $ card.manager == manager
                     assert $ card.auditor == auditor
 
                     exercise cardId Archive
@@ -103,34 +103,34 @@ template Marketplace
 
 template CardOffer
     with
-        registry: Party
+        manager: Party
         auditor: Party
         owner: Party
         description: CardDescription
     where
-        signatory registry, auditor, description.publisher
+        signatory manager, auditor, description.publisher
         observer owner
 
         controller owner can
             AcceptCard: ContractId Card do
-                create Card with registry; auditor; owner; description
+                create Card with manager; auditor; owner; description
 
 template Card
     with
-        registry: Party
+        manager: Party
         auditor: Party
         owner: Party
         description: CardDescription
     where
-        signatory registry, auditor, description.publisher, owner
+        signatory manager, auditor, description.publisher, owner
 
         choice TransferCard: ContractId Card
             with
                 recipent: Party
-            controller [ registry, auditor, owner, recipent ]
+            controller [ manager, auditor, owner, recipent ]
             do
                 create Card with
-                    registry
+                    manager
                     auditor
                     owner = recipent
                     description
@@ -151,7 +151,7 @@ template SwapOfferToTreat
                 counterCard: Card
             controller counter
                 do
-                    assert $ card.registry == counterCard.registry
+                    assert $ card.manager == counterCard.manager
                     assert $ card.auditor  == counterCard.auditor
                     assert $ card.owner    == player
                     assert $ counterCard.owner    == counter
@@ -172,14 +172,14 @@ template SwapOfferToContract
             AcceptProposal: ContractId SwapObligation
                 do
                     offer <- fetch offerId
-                    assert $ offer.card.registry == counterCard.registry
+                    assert $ offer.card.manager == counterCard.manager
                     assert $ offer.card.auditor == counterCard.auditor
                     assert $ offer.card.owner == player
                     assert $ counterCard.owner == counter
 
                     exercise offerId Archive
                     create SwapObligation with
-                        registry = counterCard.registry
+                        manager = counterCard.manager
                         auditor = counterCard.auditor
                         party1 = player
                         card1 = offer.card
@@ -188,7 +188,7 @@ template SwapOfferToContract
 
 template SwapObligation
     with
-        registry: Party
+        manager: Party
         auditor: Party
         party1: Party
         card1: Card
@@ -197,7 +197,7 @@ template SwapObligation
     where
         signatory party1, party2
 
-        controller registry, auditor can
+        controller manager, auditor can
             SettleObligation: (ContractId Card, ContractId Card)
                 with
                     card1Id: ContractId Card

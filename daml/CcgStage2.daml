@@ -1,7 +1,7 @@
 {-# LANGUAGE ApplicativeDo #-}
 
 daml 1.2
-module CcgStage1
+module CcgStage2
 where
 
 data CardDescription = CardDescription with
@@ -18,10 +18,10 @@ template Card
     where
         signatory owner, manager, auditor, description.publisher
 
-        controller owner, manager, auditor can
-            TransferCard: ContractId Card
-                with
-                    recipient: Party
+        choice TransferCard: ContractId Card
+            with
+                recipient: Party
+            controller owner, manager, auditor, recipient
                 do
                     create this with owner = recipient
 
@@ -56,6 +56,14 @@ template Marketplace
         observer publishers, invitedPublishers, players, invitedPlayers
 
         controller manager can
+            nonconsuming SettleSwapObligation: (ContractId Card, ContractId Card)
+                with
+                    obligationId: ContractId SwapObligation
+                    offererCardId: ContractId Card
+                    offereeCardId: ContractId Card
+                do
+                    exercise obligationId SettleObligation with marketId = self; offererCardId; offereeCardId
+
             InvitePublisher: ContractId Marketplace
                 with
                     invitee: Party
@@ -129,3 +137,84 @@ template CardOffer
             AcceptCard: ContractId Card
                 do
                     create Card with manager; auditor; owner = player; description
+
+template SwapOfferToTreat
+    with
+        player: Party
+        card: Card
+        informees: [Party]
+    where
+        signatory player
+        observer informees
+        ensure card.owner == player
+
+        nonconsuming choice AcceptOfferToTreat: ContractId SwapOfferToContract
+            with
+                oOfferer: Party
+                oOffererCard: Card
+            controller oOfferer
+                do
+                    create SwapOfferToContract with
+                        oOfferer
+                        oOffererCard
+                        oOfferee = player
+                        oOffereeCard = card
+                        offerToTreat = self
+
+template SwapOfferToContract
+    with
+        oOfferer: Party
+        oOffererCard: Card
+        oOfferee: Party
+        oOffereeCard: Card
+        offerToTreat: ContractId SwapOfferToTreat
+    where
+        signatory oOfferer
+
+        controller oOfferee can
+            AcceptSwapOffer: ContractId SwapObligation
+                do
+                    exercise offerToTreat Archive
+                    create SwapObligation with
+                        offerer = oOfferer
+                        offererCard = oOffererCard
+                        offeree = oOfferee
+                        offereeCard = oOffereeCard
+
+template SwapObligation
+    with
+        offerer: Party
+        offererCard: Card
+        offeree: Party
+        offereeCard: Card
+    where
+        signatory offerer, offeree
+        observer offererCard.manager, offererCard.auditor
+        ensure offererCard.owner == offerer 
+            && offereeCard.owner == offeree
+            && offererCard.manager == offereeCard.manager
+            && offereeCard.auditor == offereeCard.auditor
+
+        choice SettleObligation: (ContractId Card, ContractId Card)
+            with
+                marketId: ContractId Marketplace
+                offererCardId: ContractId Card
+                offereeCardId: ContractId Card
+            controller offererCard.manager, offererCard.auditor
+            do
+                market <- fetch marketId
+                assert $ market.manager == offererCard.manager
+                assert $ market.auditor == offererCard.auditor
+                assert $ offerer `elem` market.players
+                assert $ offeree `elem` market.players
+                assert $ offererCard.description.publisher `elem` market.publishers
+                assert $ offereeCard.description.publisher `elem` market.publishers
+
+                offererLedger <- fetch offererCardId
+                assert $ offererLedger == offererCard
+
+                offereeLedger <- fetch offereeCardId
+                assert $ offereeLedger == offereeCard
+
+                (,) <$> exercise offererCardId TransferCard with recipient = offeree
+                    <*> exercise offereeCardId TransferCard with recipient = offerer

@@ -1,8 +1,8 @@
 daml 1.2
-module TestCcgMarket
+module TestCcgState2
 where
 
-import CcgMarket
+import CcgStage2
 
 swapTrade : Scenario ()
 swapTrade = do
@@ -12,7 +12,7 @@ swapTrade = do
 
     -- Set up the participants in the marketplace
     -- Market operator and regulator/auditor
-    manager <- getParty "Show me the money"
+    manager <- getParty "I want the money"
     auditor <- getParty "You cant have it"
     -- Publishers
     inlandSorc <- getParty "Inland Sorcerers"
@@ -26,10 +26,10 @@ swapTrade = do
     market <- auditor `submit` exercise mkp AcceptMarket
     market <- manager `submit` exercise market InvitePublisher with invitee = inlandSorc
     market <- manager `submit` exercise market InvitePublisher with invitee = nineDisc
-    market <- manager `submit` exercise market InvitePlayer with invitee = alice
-    market <- manager `submit` exercise market InvitePlayer with invitee = bob
     market <- inlandSorc `submit` exercise market AcceptPublisher with accepter = inlandSorc
     market <- nineDisc `submit` exercise market AcceptPublisher with accepter = nineDisc
+    market <- inlandSorc `submit` exercise market InvitePlayer with invitor = inlandSorc; invitee = alice
+    market <- nineDisc `submit` exercise market InvitePlayer with invitor = nineDisc; invitee = bob
     -- Note: Bob cannot accept on behalf of alice
     bob `submitMustFail` exercise market AcceptPlayer with accepter = alice
     market <- alice `submit` exercise market AcceptPlayer with accepter = alice
@@ -37,15 +37,16 @@ swapTrade = do
 
     -- Issue two cards to Alice and Bob
     int <- inlandSorc `submit` exercise market IssueCard with 
-                owner = alice
-                description = CardDescription with publisher = inlandSorc; description = "Immovable Force"
+                player = alice
+                description = CardDescription with publisher = inlandSorc; cardText = "Immovable Force"
     forceId <- alice `submit` exercise int AcceptCard
     force <- alice `submit` fetch forceId
 
     int <- nineDisc `submit` exercise market IssueCard with 
-                owner = bob
-                description = CardDescription with publisher = nineDisc; description = "Irresistable Object"
+                player = bob
+                description = CardDescription with publisher = nineDisc; cardText = "Iresistable Obect"
     objectId <- bob `submit` exercise int AcceptCard
+    objectId <- nineDisc `submit` exercise market UpdateCardText with publisher = nineDisc; cardId = objectId; newText = "Irresistable Object"
     object <- bob `submit` fetch objectId
 
     ---------------------------------
@@ -79,17 +80,15 @@ swapTrade = do
     nineDisc `submitMustFail` fetch aliceOffer
     
     -- Bob decides to offer to swap his card with Alice
-    bobProposal <- bob `submit` exercise aliceOffer AcceptOfferToTreat with counter = bob; counterCard = object
+    bobProposal <- bob `submit` exercise aliceOffer AcceptOfferToTreat with oOfferer = bob; oOffererCard = object
 
     -- Alice's offer is still valid ...
     alice `submit` fetch aliceOffer
-
-    -- ... until Alice accepts Bob's proposal
-    obligation <- alice `submit` exercise bobProposal AcceptProposal
-
-    -- Then the offer is archived
+    -- ... until Alice accepts Bob's proposal ...
+    obligationId <- alice `submit` exercise bobProposal AcceptSwapOffer
+    -- ... then the offer is archived ...
     alice `submitMustFail` fetch aliceOffer
-    -- As is Bob's proposal
+    -- ... as is Bob's proposal.
     alice `submitMustFail` fetch bobProposal
 
     -- Instead there is now a SwapObligation
@@ -99,9 +98,9 @@ swapTrade = do
     
     -- So the manager completes the trade
     -- But is prevented from bypassing the auditor
-    manager `submitMustFail` exercise obligation SettleObligation with card1Id = forceId; card2Id = objectId
+    manager `submitMustFail` exercise obligationId SettleObligation with marketId = market; offereeCardId = forceId; offererCardId = objectId
     -- So must use the MSA to get the delgated authorization of the auditor (which also gives the auditor visibility on the trade)
-    (aliceCard, bobCard) <- manager `submit` exercise market SettleSwapObligation with obligation; card1Id = forceId; card2Id = objectId
+    (aliceCard, bobCard) <- manager `submit` exercise market SettleSwapObligation with obligationId; offereeCardId = forceId; offererCardId = objectId
 
     ---------------------------------
     -- Privacy Demonstration Part 2
@@ -110,14 +109,14 @@ swapTrade = do
     -- Alice and Bob has swapped their respective cards
     alice `submit` fetch aliceCard
     bob `submit` fetch bobCard
-    -- But can't see each other's
+    -- -- But can't see each other's
     alice `submitMustFail` fetch bobCard
     bob `submitMustFail` fetch aliceCard
 
-    -- Finally, the old cards have been archived ...
+    -- -- Finally, the old cards have been archived ...
     inlandSorc `submitMustFail` fetch forceId
     nineDisc `submitMustFail` fetch objectId
-    -- ... and have been informed of the new card owners
+    -- -- ... and have been informed of the new card owners
     inlandSorc `submit` fetch bobCard
     nineDisc `submit` fetch aliceCard
 
