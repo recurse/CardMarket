@@ -1,0 +1,357 @@
+daml 1.2
+module CcgMarket
+where
+
+newtype CardDescription = CardDescription Text deriving (Show, Eq)
+
+template ProposeMarket
+    with
+        registry: Party
+        auditor: Party
+    where
+        signatory registry
+        ensure registry /= auditor
+
+        controller auditor can
+            AcceptMarket: ContractId Msa do
+                create $ Msa registry auditor [] [] [] []
+
+template Msa
+    with
+        registry: Party
+        auditor: Party
+        players: [Party]
+        publishers: [Party]
+        invitedPlayers: [Party]
+        invitedPublishers: [Party]
+    where
+        signatory registry, auditor
+        observer players <> publishers <> invitedPlayers <> invitedPublishers
+
+        nonconsuming choice IssueCard: ContractId CardOffer
+            with
+                publisher: Party
+                owner: Party
+                terms: CardDescription
+            controller publisher
+            do
+                assert $ publisher `elem` publishers
+                create CardOffer with registry; auditor; publisher; owner; terms
+
+        nonconsuming choice GlobalOffer: ContractId SwapOffer
+            with
+                player: Party
+                cardId: ContractId Card
+            controller player
+            do
+                assert $ player `elem` players
+                card <- fetch cardId
+                assert $ card.registry == registry
+                assert $ card.auditor  == auditor
+                assert $ card.owner    == player
+
+                create SwapOffer with player; players; cardId; card
+
+        controller registry can
+            nonconsuming SettleSwapObligation: (ContractId Card, ContractId Card)
+                with
+                    obligation: ContractId SwapObligation
+                do
+                    exercise obligation SettleObligation
+
+            InvitePublisher: ContractId Msa
+                with
+                    invitee: Party
+                do
+                    assert $ invitee `notElem` publishers
+                    assert $ invitee `notElem` invitedPublishers
+                    create this with invitedPublishers = invitee :: invitedPublishers
+
+            InvitePlayer: ContractId Msa
+                with
+                    invitee: Party
+                do
+                    assert $ invitee `notElem` publishers
+                    assert $ invitee `notElem` invitedPlayers
+                    create this with invitedPlayers = invitee :: invitedPlayers
+
+        choice AcceptPublisher: ContractId Msa
+            with
+                accepter: Party
+            controller accepter
+            do
+                assert $ accepter `elem` invitedPublishers
+                create this with
+                    publishers = accepter :: publishers
+                    invitedPublishers = filter ((/=) accepter) invitedPublishers
+        
+        choice AcceptPlayer: ContractId Msa
+            with
+                accepter: Party
+            controller accepter
+            do
+                assert $ accepter `elem` invitedPlayers
+                create this with
+                    players = accepter :: players
+                    invitedPlayers = filter ((/=) accepter) invitedPlayers
+        
+        controller registry, auditor can
+            UpdateCard: ContractId Card
+                with
+                    cardId: ContractId Card
+                    publisher: Party
+                    owner: Party
+                    terms: CardDescription
+                do
+                    card <- fetch cardId
+                    assert $ card.registry == registry
+                    assert $ card.auditor == auditor
+
+                    exercise cardId Archive
+                    create card with publisher; owner; terms
+
+template CardOffer
+    with
+        registry: Party
+        auditor: Party
+        publisher: Party
+        owner: Party
+        terms: CardDescription
+    where
+        signatory registry, auditor, publisher
+        observer owner
+
+        controller owner can
+            AcceptCard: ContractId Card do
+                create Card with registry; auditor; publisher; owner; terms
+
+template Card
+    with
+        registry: Party
+        auditor: Party
+        publisher: Party
+        owner: Party
+        terms: CardDescription
+    where
+        signatory registry, auditor, publisher, owner
+
+        choice TransferCard: ContractId Card
+            with
+                recipent: Party
+            controller [ registry, auditor, owner, recipent ]
+            do
+                create Card with
+                    registry
+                    auditor
+                    publisher
+                    owner = recipent
+                    terms
+
+template SwapOffer
+    with
+        player: Party
+        players: [Party]
+        card: Card
+        cardId: ContractId Card
+    where
+        signatory player
+        ensure card.owner == player
+        observer players
+
+        nonconsuming choice AcceptSwapOffer: ContractId SwapProposal
+            with
+                msaId: ContractId Msa
+                counter: Party
+                counterCardId: ContractId Card
+            controller counter
+                do
+                    msa <- fetch msaId
+                    assert $ player `elem` msa.players
+                    assert $ counter `elem` msa.players
+
+                    assert $ card.registry == msa.registry
+                    assert $ card.auditor  == msa.auditor
+
+                    counterCard <- fetch counterCardId
+                    assert $ counterCard.registry == msa.registry
+                    assert $ counterCard.auditor  == msa.auditor
+                    assert $ counterCard.owner    == counter
+
+                    create SwapProposal with player; offerId = self; card; counter; counterCard; counterCardId
+        
+template SwapProposal
+    with
+        player: Party
+        offerId: ContractId SwapOffer
+        card: Card
+        counter: Party
+        counterCardId: ContractId Card
+        counterCard: Card
+    where
+        signatory counter
+        ensure card.owner == player && counterCard.owner == counter
+
+        controller player can
+            AcceptProposal: ContractId SwapObligation
+                with
+                    msaId: ContractId Msa
+                do
+                    msa <- fetch msaId
+                    offer <- fetch offerId
+                    card <- fetch offer.cardId
+                    assert $ card.registry == msa.registry
+                    counterCard <- fetch counterCardId
+                    assert $ counterCard.registry == msa.registry
+
+                    exercise offerId Archive
+                    create SwapObligation with
+                        registry = msa.registry
+                        auditor = msa.auditor
+                        party1 = player
+                        card1Id = offer.cardId
+                        party2 = counter
+                        card2Id = counterCardId
+
+template SwapObligation
+    with
+        registry: Party
+        auditor: Party
+        party1: Party
+        card1Id: ContractId Card
+        party2: Party
+        card2Id: ContractId Card
+    where
+        signatory party1, party2
+
+        controller registry, auditor can
+            SettleObligation: (ContractId Card, ContractId Card)
+                do
+                    card1 <- fetch card1Id
+                    card2 <- fetch card2Id
+                    assert $ card1.registry == card2.registry
+                    assert $ card1.owner == party1
+                    assert $ card2.owner == party2
+                    
+                    (,) <$> exercise card2Id TransferCard with recipent = party1
+                        <*> exercise card1Id TransferCard with recipent = party2
+
+swapTrade : Scenario ()
+swapTrade = do
+    -----------------
+    -- Market Setup
+    -----------------
+
+    -- Set up the participants in the marketplace
+    -- Market operator and regulator/auditor
+    registry <- getParty "Show me the money"
+    auditor <- getParty "You cant have it"
+    -- Publishers
+    inlandSorc <- getParty "Inland Sorcerers"
+    nineDisc <- getParty "Nine Disc Publishers"
+    -- Gamers
+    alice <- getParty "Alice"
+    bob <- getParty "Bob"
+
+    -- Setup the market and have the participants join
+    mkp <- registry `submit` create ProposeMarket with registry; auditor
+    msa <- auditor `submit` exercise mkp AcceptMarket
+    msa <- registry `submit` exercise msa InvitePublisher with invitee = inlandSorc
+    msa <- registry `submit` exercise msa InvitePublisher with invitee = nineDisc
+    msa <- registry `submit` exercise msa InvitePlayer with invitee = alice
+    msa <- registry `submit` exercise msa InvitePlayer with invitee = bob
+    msa <- inlandSorc `submit` exercise msa AcceptPublisher with accepter = inlandSorc
+    msa <- nineDisc `submit` exercise msa AcceptPublisher with accepter = nineDisc
+    -- Note: Bob cannot accept on behalf of alice
+    bob `submitMustFail` exercise msa AcceptPlayer with accepter = alice
+    msa <- alice `submit` exercise msa AcceptPlayer with accepter = alice
+    msa <- bob `submit` exercise msa AcceptPlayer with accepter = bob
+
+    -- Issue two cards to Alice and Bob
+    int <- inlandSorc `submit` exercise msa IssueCard with 
+                publisher = inlandSorc
+                owner = alice
+                terms = CardDescription "Immovable Object"
+    iocId <- alice `submit` exercise int AcceptCard
+    ioc <- alice `submit` fetch iocId
+
+    int <- nineDisc `submit` exercise msa IssueCard with 
+                publisher = nineDisc
+                owner = bob
+                terms = CardDescription "Irresistable Force"
+    ifcId <- bob `submit` exercise int AcceptCard
+    ifc <- bob `submit` fetch ifcId
+
+    ---------------------------------
+    -- Privacy Demonstration Part 1
+    ---------------------------------
+
+    -- Alice doesn't know Bob's cards and vis versa
+    alice `submitMustFail` fetch ifcId
+    bob `submitMustFail` fetch iocId
+    -- Publishers know who owns their cards
+    inlandSorc `submit` fetch iocId
+    nineDisc `submit` fetch ifcId
+    -- But don't know who owns other cards
+    inlandSorc `submitMustFail` fetch ifcId
+    nineDisc `submitMustFail` fetch iocId
+    -- But the registry and auditor can see all ownership
+    registry `submit` fetch iocId
+    registry `submit` fetch ifcId
+    auditor `submit` fetch iocId
+    auditor `submit` fetch ifcId
+
+    -----------------------------------
+    -- Sale via Delgation to Registry
+    -----------------------------------
+
+    -- Alice doesn't want her card and offers to swap
+    aliceOffer <- alice `submit` exercise msa GlobalOffer with player = alice; cardId = iocId
+    -- Bob can see the offer, but Publishers can't
+    bob `submit` fetch aliceOffer
+    inlandSorc `submitMustFail` fetch aliceOffer
+    nineDisc `submitMustFail` fetch aliceOffer
+    
+    -- Bob decides to offer to swap his card with Alice
+    bobProposal <- bob `submit` exercise aliceOffer AcceptSwapOffer with msaId = msa; counter = bob; counterCardId = ifcId
+
+    -- Alice's offer is still valid ...
+    alice `submit` fetch aliceOffer
+
+    -- ... until Alice accepts Bob's proposal
+    obligation <- alice `submit` exercise bobProposal AcceptProposal with msaId = msa
+
+    -- Then the offer is archived
+    alice `submitMustFail` fetch aliceOffer
+    -- As is Bob's proposal
+    alice `submitMustFail` fetch bobProposal
+
+    -- Instead there is now a SwapObligation
+    -- This is needed because, even at this point, Bob and Alice can't see each other's cards on the ledger
+    alice `submitMustFail` fetch ifcId
+    bob `submitMustFail` fetch iocId
+    
+    -- So the registry completes the trade
+    -- But is prevented from bypassing the auditor
+    registry `submitMustFail` exercise obligation SettleObligation
+    -- So must use the MSA to get the delgated authorization of the auditor (which also gives the auditor visibility on the trade)
+    (aliceCard, bobCard) <- registry `submit` exercise msa SettleSwapObligation with obligation
+
+    ----------------------------
+    -- Final Visibility Checks
+    ----------------------------
+
+    -- Alice and Bob has swapped their respective cards
+    alice `submit` fetch aliceCard
+    bob `submit` fetch bobCard
+    -- But can't see each other's
+    alice `submitMustFail` fetch bobCard
+    bob `submitMustFail` fetch aliceCard
+
+    -- Finally, the old cards have been archived ...
+    inlandSorc `submitMustFail` fetch iocId
+    nineDisc `submitMustFail` fetch ifcId
+    -- ... and have been informed of the new card owners
+    inlandSorc `submit` fetch bobCard
+    nineDisc `submit` fetch aliceCard
+
+    pure ()
