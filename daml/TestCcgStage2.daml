@@ -24,63 +24,88 @@ swapTrade = do
     -- Setup the market and have the participants join
     mkp <- manager `submit` create ProposeMarket with manager; auditor
     market <- auditor `submit` exercise mkp AcceptMarket
+
+    ---------------------
+    -- Setup Publishers
+    ---------------------
+
     market <- manager `submit` exercise market InvitePublisher with invitee = inlandSorc
     market <- manager `submit` exercise market InvitePublisher with invitee = nineDisc
     market <- inlandSorc `submit` exercise market AcceptPublisher with accepter = inlandSorc
     market <- nineDisc `submit` exercise market AcceptPublisher with accepter = nineDisc
-    market <- inlandSorc `submit` exercise market InvitePlayer with invitor = inlandSorc; invitee = alice
-    market <- nineDisc `submit` exercise market InvitePlayer with invitor = nineDisc; invitee = bob
-    -- Note: Bob cannot accept on behalf of alice
-    bob `submitMustFail` exercise market AcceptPlayer with accepter = alice
-    market <- alice `submit` exercise market AcceptPlayer with accepter = alice
-    market <- bob `submit` exercise market AcceptPlayer with accepter = bob
 
-    -- Issue two cards to Alice and Bob
-    int <- inlandSorc `submit` exercise market IssueCard with 
+    ------------------
+    -- Setup Players
+    ------------------
+
+    market <- inlandSorc `submit` exercise market AddPlayer with publisher = inlandSorc; player = alice
+    market <- nineDisc `submit` exercise market AddPlayer with publisher = nineDisc; player = bob
+
+    -- Note: Market rules do not allow the manager to add players, only publishers
+    -- manager `submit` exercise market AddPlayer with publisher = nineDisc; player = bob
+    manager `submitMustFail` exercise market AddPlayer with publisher = nineDisc; player = bob
+
+    --------------------
+    -- Issue two cards
+    --------------------
+    int <- inlandSorc `submit` exercise market IssueCard with
                 player = alice
                 description = CardDescription with publisher = inlandSorc; cardText = "Immovable Force"
-    forceId <- alice `submit` exercise int AcceptCard
-    force <- alice `submit` fetch forceId
+    forceCardId <- alice `submit` exercise int AcceptCard
+    forceCard <- alice `submit` fetch forceCardId
 
-    int <- nineDisc `submit` exercise market IssueCard with 
+    int <- nineDisc `submit` exercise market IssueCard with
                 player = bob
                 description = CardDescription with publisher = nineDisc; cardText = "Iresistable Obect"
-    objectId <- bob `submit` exercise int AcceptCard
-    objectId <- nineDisc `submit` exercise market UpdateCardText with publisher = nineDisc; cardId = objectId; newText = "Irresistable Object"
-    object <- bob `submit` fetch objectId
+    objectCardId <- bob `submit` exercise int AcceptCard
+
+    -----------------
+    -- Apply Errata
+    -----------------
+
+    objectCardId <- nineDisc `submit` exercise market UpdateCardText with
+        publisher = nineDisc
+        cardId = objectCardId
+        newText = "Irresistable Object"
+    objectCard <- bob `submit` fetch objectCardId
 
     ---------------------------------
     -- Privacy Demonstration Part 1
     ---------------------------------
 
     -- Alice doesn't know Bob's cards and vis versa
-    alice `submitMustFail` fetch objectId
-    bob `submitMustFail` fetch forceId
+    alice `submitMustFail` fetch objectCardId
+    bob `submitMustFail` fetch forceCardId
+
     -- Publishers know who owns their cards
-    inlandSorc `submit` fetch forceId
-    nineDisc `submit` fetch objectId
+    inlandSorc `submit` fetch forceCardId
+    nineDisc `submit` fetch objectCardId
+
     -- But don't know who owns other cards
-    inlandSorc `submitMustFail` fetch objectId
-    nineDisc `submitMustFail` fetch forceId
+    inlandSorc `submitMustFail` fetch objectCardId
+    nineDisc `submitMustFail` fetch forceCardId
+
     -- But the manager and auditor can see all ownership
-    manager `submit` fetch forceId
-    manager `submit` fetch objectId
-    auditor `submit` fetch forceId
-    auditor `submit` fetch objectId
+    manager `submit` fetch forceCardId
+    manager `submit` fetch objectCardId
+    auditor `submit` fetch forceCardId
+    auditor `submit` fetch objectCardId
 
     -----------------------------------
     -- Sale via Delgation to Registry
     -----------------------------------
 
     -- Alice doesn't want her card and offers to swap
-    aliceOffer <- alice `submit` create SwapOfferToTreat with player = alice; card = force; informees = [ bob ]
-    -- Bob can see the offer, but Publishers can't
+    aliceOffer <- alice `submit` create SwapOfferToTreat with player = alice; card = forceCard; informees = [ bob ]
+
+    -- Bob can see the offer
     bob `submit` fetch aliceOffer
+    -- but Publishers can't
     inlandSorc `submitMustFail` fetch aliceOffer
     nineDisc `submitMustFail` fetch aliceOffer
-    
+
     -- Bob decides to offer to swap his card with Alice
-    bobProposal <- bob `submit` exercise aliceOffer AcceptOfferToTreat with oOfferer = bob; oOffererCard = object
+    bobProposal <- bob `submit` exercise aliceOffer AcceptOfferToTreat with oOfferer = bob; oOffererCard = objectCard
 
     -- Alice's offer is still valid ...
     alice `submit` fetch aliceOffer
@@ -93,14 +118,14 @@ swapTrade = do
 
     -- Instead there is now a SwapObligation
     -- This is needed because, even at this point, Bob and Alice can't see each other's cards on the ledger
-    alice `submitMustFail` fetch objectId
-    bob `submitMustFail` fetch forceId
-    
+    alice `submitMustFail` fetch objectCardId
+    bob `submitMustFail` fetch forceCardId
+
     -- So the manager completes the trade
     -- But is prevented from bypassing the auditor
-    manager `submitMustFail` exercise obligationId SettleObligation with marketId = market; offereeCardId = forceId; offererCardId = objectId
+    manager `submitMustFail` exercise obligationId SettleObligation with marketId = market; offereeCardId = forceCardId; offererCardId = objectCardId
     -- So must use the MSA to get the delgated authorization of the auditor (which also gives the auditor visibility on the trade)
-    (aliceCard, bobCard) <- manager `submit` exercise market SettleSwapObligation with obligationId; offereeCardId = forceId; offererCardId = objectId
+    (aliceCard, bobCard) <- manager `submit` exercise market SettleSwapObligation with obligationId; offereeCardId = forceCardId; offererCardId = objectCardId
 
     ---------------------------------
     -- Privacy Demonstration Part 2
@@ -114,10 +139,13 @@ swapTrade = do
     bob `submitMustFail` fetch aliceCard
 
     -- -- Finally, the old cards have been archived ...
-    inlandSorc `submitMustFail` fetch forceId
-    nineDisc `submitMustFail` fetch objectId
+    inlandSorc `submitMustFail` fetch forceCardId
+    nineDisc `submitMustFail` fetch objectCardId
     -- -- ... and have been informed of the new card owners
     inlandSorc `submit` fetch bobCard
     nineDisc `submit` fetch aliceCard
+
+    inlandSorc `submitMustFail` fetch aliceCard
+    nineDisc `submitMustFail` fetch bobCard
 
     pure ()

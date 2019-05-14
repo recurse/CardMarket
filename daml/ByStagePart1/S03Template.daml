@@ -1,0 +1,19 @@
+{-# LANGUAGE ApplicativeDo #-}
+
+daml 1.2
+module ByStagePart1.S03Template
+where
+
+data CardDescription = CardDescription with
+    publisher: Party
+    cardText: Text
+  deriving (Eq, Show)
+
+template Card
+    with
+        manager: Party
+        auditor: Party
+        owner: Party
+        description: CardDescription
+    where
+        signatory owner, manager, auditor, description.publisher

@@ -1,0 +1,172 @@
+{-# LANGUAGE ApplicativeDo #-}
+
+daml 1.2
+module ByStagePart1.S11Privacy
+where
+
+data CardDescription = CardDescription with
+    publisher: Party
+    cardText: Text
+  deriving (Eq, Show)
+
+template ProposeMarket
+    with
+        manager: Party
+        auditor: Party
+    where
+        signatory manager
+
+        controller auditor can
+            AcceptMarket: ContractId Marketplace
+                do create $ Marketplace manager auditor [] [] []
+
+template Marketplace
+    with
+        manager: Party
+        auditor: Party
+        publishers: [Party]
+        invitedPublishers: [Party]
+        players: [Party]
+    where
+        signatory manager, auditor
+        observer publishers, invitedPublishers, players
+
+        controller manager can
+            InvitePublisher: ContractId Marketplace
+                with
+                    invitee: Party
+                do
+                    assert $ invitee `notElem` invitedPublishers
+                    assert $ invitee `notElem` publishers
+                    create this with invitedPublishers = invitee :: invitedPublishers
+
+        choice AcceptPublisher: ContractId Marketplace
+            with
+                accepter: Party
+            controller accepter
+                do
+                    assert $ accepter `elem` invitedPublishers
+                    create this with
+                        publishers = accepter :: publishers
+                        invitedPublishers = filter ((/=) accepter) invitedPublishers
+
+        choice AddPlayer: ContractId Marketplace
+            with
+                publisher: Party
+                player: Party
+            controller publisher
+                do
+                    assert $ publisher `elem` publishers
+                    assert $ player `notElem` players
+                    create this with players = player :: players
+
+        nonconsuming choice IssueCard: ContractId CardOffer
+            with
+                description: CardDescription
+                player: Party
+            controller description.publisher
+                do
+                    assert $ description.publisher `elem` publishers
+                    assert $ player `elem` players
+                    create CardOffer with manager; auditor; player; description
+
+template CardOffer
+    with
+        manager: Party
+        auditor: Party
+        player: Party
+        description: CardDescription
+    where
+        signatory manager, auditor, description.publisher
+
+        controller player can
+            AcceptCard: ContractId Card
+                do
+                    create Card with manager; auditor; owner = player; description
+
+template Card
+    with
+        manager: Party
+        auditor: Party
+        owner: Party
+        description: CardDescription
+    where
+        signatory owner, manager, auditor, description.publisher
+
+demoCreateMarket = scenario do
+    -----------------
+    -- Market Setup
+    -----------------
+
+    -- Set up the participants in the marketplace
+    -- Market operator and regulator/auditor
+    manager <- getParty "I want the money"
+    auditor <- getParty "You cant have it"
+    -- Publishers
+    inlandSorc <- getParty "Inland Sorcerers"
+    nineDisc <- getParty "Nine Disc Publishers"
+    -- Gamers
+    alice <- getParty "Alice"
+    bob <- getParty "Bob"
+
+    -- Setup the market and have the participants join
+    mkp <- manager `submit` create ProposeMarket with manager; auditor
+    market <- auditor `submit` exercise mkp AcceptMarket
+
+    ---------------------
+    -- Setup Publishers
+    ---------------------
+
+    market <- manager `submit` exercise market InvitePublisher with invitee = inlandSorc
+    market <- manager `submit` exercise market InvitePublisher with invitee = nineDisc
+    market <- inlandSorc `submit` exercise market AcceptPublisher with accepter = inlandSorc
+    market <- nineDisc `submit` exercise market AcceptPublisher with accepter = nineDisc
+
+    ------------------
+    -- Setup Players
+    ------------------
+
+    market <- inlandSorc `submit` exercise market AddPlayer with publisher = inlandSorc; player = alice
+    market <- nineDisc `submit` exercise market AddPlayer with publisher = nineDisc; player = bob
+
+    -- Note: Market rules do not allow the manager to add players, only publishers
+    -- manager `submit` exercise market AddPlayer with publisher = nineDisc; player = bob
+    manager `submitMustFail` exercise market AddPlayer with publisher = nineDisc; player = bob
+
+    --------------------
+    -- Issue two cards
+    --------------------
+    int <- inlandSorc `submit` exercise market IssueCard with
+                player = alice
+                description = CardDescription with publisher = inlandSorc; cardText = "Immovable Force"
+    forceCardId <- alice `submit` exercise int AcceptCard
+    force <- alice `submit` fetch forceCardId
+
+    int <- nineDisc `submit` exercise market IssueCard with
+                player = bob
+                description = CardDescription with publisher = nineDisc; cardText = "Iresistable Obect"
+    objectCardId <- bob `submit` exercise int AcceptCard
+
+    ---------------------------------
+    -- Privacy Demonstration Part 1
+    ---------------------------------
+
+    -- Alice doesn't know Bob's cards and vis versa
+    alice `submitMustFail` fetch objectCardId
+    bob `submitMustFail` fetch forceCardId
+
+    -- Publishers know who owns their cards
+    inlandSorc `submit` fetch forceCardId
+    nineDisc `submit` fetch objectCardId
+
+    -- But don't know who owns other cards
+    inlandSorc `submitMustFail` fetch objectCardId
+    nineDisc `submitMustFail` fetch forceCardId
+
+    -- But the manager and auditor can see all ownership
+    manager `submit` fetch forceCardId
+    manager `submit` fetch objectCardId
+    auditor `submit` fetch forceCardId
+    auditor `submit` fetch objectCardId
+
+    pure ()

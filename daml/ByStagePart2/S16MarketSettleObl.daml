@@ -1,7 +1,7 @@
 {-# LANGUAGE ApplicativeDo #-}
 
 daml 1.2
-module CcgStage2
+module ByStagePart2.CcgStage14
 where
 
 data CardDescription = CardDescription with
@@ -40,6 +40,22 @@ template Marketplace
                     assert $ invitee `notElem` publishers
                     create this with invitedPublishers = invitee :: invitedPublishers
 
+            ---------------------------------------------------------------------------------
+            -- So far, this is the only workflow the auditor has approved for settling
+            --   SwapObligations. As the SettleObligation choice requires the authorization
+            --   of BOTH the manager and auditor, this is therefore the only way the manager
+            --   has to settle an obligation.
+            --
+            -- Note: There is nothing preventing the auditor from writing and creating an
+            --   alternate contract to authorize a special settlement, possibly to reflect
+            --   reglatory or legislative changes, or to honour a legal judgement, or just
+            --   an operational fix in good-faith.
+            --
+            -- Note: Until we reach a choice with precisely one controller, we cannot
+            --   interact with a workflow from outside a DAML transaction. Commands have
+            --   precisely ONE authorizer, and so can only exercise choices with precisely
+            --   ONE required authorizing party/controller.
+            ---------------------------------------------------------------------------------
             nonconsuming SettleSwapObligation: (ContractId Card, ContractId Card)
                 with
                     obligationId: ContractId SwapObligation
@@ -167,56 +183,98 @@ template SwapObligation
                     (,) <$> exercise offererCardId TransferCard with recipient = offeree
                         <*> exercise offereeCardId TransferCard with recipient = offerer
 
------------------------------------------------------------------------------
--- Simple multi-lateral workflow that results in a bilateral SwapObligation
---
--- Note: This does not involve the market, the auditor, or the publishers
---   this workflow is known exclusively to the players. DAML guarrantees
---   that the resulting SwapObligation is well formed, and properly
---   authorized.
---   The resulting SwapObligation can only be settled by the manager via
---   a workflow authorized and monitored by the marketplace auditor
------------------------------------------------------------------------------
 
-template SwapOfferToTreat
-    with
-        player: Party
-        card: Card
-        informees: [Party]
-    where
-        signatory player
-        observer informees
-        ensure card.owner == player
 
-        nonconsuming choice AcceptOfferToTreat: ContractId SwapOfferToContract
-            with
-                oOfferer: Party
-                oOffererCard: Card
-            controller oOfferer
-                do
-                    create SwapOfferToContract with
-                        oOfferer
-                        oOffererCard
-                        oOfferee = player
-                        oOffereeCard = card
-                        offerToTreat = self
 
-template SwapOfferToContract
-    with
-        oOfferer: Party
-        oOffererCard: Card
-        oOfferee: Party
-        oOffereeCard: Card
-        offerToTreat: ContractId SwapOfferToTreat
-    where
-        signatory oOfferer
 
-        controller oOfferee can
-            AcceptSwapOffer: ContractId SwapObligation
-                do
-                    exercise offerToTreat Archive
-                    create SwapObligation with
-                        offerer = oOfferer
-                        offererCard = oOffererCard
-                        offeree = oOfferee
-                        offereeCard = oOffereeCard
+
+
+
+
+
+demoCreateMarket = scenario do
+    -----------------
+    -- Market Setup
+    -----------------
+
+    -- Set up the participants in the marketplace
+    -- Market operator and regulator/auditor
+    manager <- getParty "I want the money"
+    auditor <- getParty "You cant have it"
+    -- Publishers
+    inlandSorc <- getParty "Inland Sorcerers"
+    nineDisc <- getParty "Nine Disc Publishers"
+    -- Gamers
+    alice <- getParty "Alice"
+    bob <- getParty "Bob"
+
+    -- Setup the market and have the participants join
+    mkp <- manager `submit` create ProposeMarket with manager; auditor
+    market <- auditor `submit` exercise mkp AcceptMarket
+
+    ---------------------
+    -- Setup Publishers
+    ---------------------
+
+    market <- manager `submit` exercise market InvitePublisher with invitee = inlandSorc
+    market <- manager `submit` exercise market InvitePublisher with invitee = nineDisc
+    market <- inlandSorc `submit` exercise market AcceptPublisher with accepter = inlandSorc
+    market <- nineDisc `submit` exercise market AcceptPublisher with accepter = nineDisc
+
+    ------------------
+    -- Setup Players
+    ------------------
+
+    market <- inlandSorc `submit` exercise market AddPlayer with publisher = inlandSorc; player = alice
+    market <- nineDisc `submit` exercise market AddPlayer with publisher = nineDisc; player = bob
+
+    -- Note: Market rules do not allow the manager to add players, only publishers
+    -- manager `submit` exercise market AddPlayer with publisher = nineDisc; player = bob
+    manager `submitMustFail` exercise market AddPlayer with publisher = nineDisc; player = bob
+
+    --------------------
+    -- Issue two cards
+    --------------------
+    int <- inlandSorc `submit` exercise market IssueCard with
+                player = alice
+                description = CardDescription with publisher = inlandSorc; cardText = "Immovable Force"
+    forceCardId <- alice `submit` exercise int AcceptCard
+    force <- alice `submit` fetch forceCardId
+
+    int <- nineDisc `submit` exercise market IssueCard with
+                player = bob
+                description = CardDescription with publisher = nineDisc; cardText = "Iresistable Obect"
+    objectCardId <- bob `submit` exercise int AcceptCard
+
+    -----------------
+    -- Apply Errata
+    -----------------
+
+    objectCardId <- nineDisc `submit` exercise market UpdateCardText with
+        publisher = nineDisc
+        cardId = objectCardId
+        newText = "Irresistable Object"
+
+    ---------------------------------
+    -- Privacy Demonstration Part 1
+    ---------------------------------
+
+    -- Alice doesn't know Bob's cards and vis versa
+    alice `submitMustFail` fetch objectCardId
+    bob `submitMustFail` fetch forceCardId
+
+    -- Publishers know who owns their cards
+    inlandSorc `submit` fetch forceCardId
+    nineDisc `submit` fetch objectCardId
+
+    -- But don't know who owns other cards
+    inlandSorc `submitMustFail` fetch objectCardId
+    nineDisc `submitMustFail` fetch forceCardId
+
+    -- But the manager and auditor can see all ownership
+    manager `submit` fetch forceCardId
+    manager `submit` fetch objectCardId
+    auditor `submit` fetch forceCardId
+    auditor `submit` fetch objectCardId
+
+    pure ()

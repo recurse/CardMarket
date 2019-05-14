@@ -1,0 +1,43 @@
+{-# LANGUAGE ApplicativeDo #-}
+
+daml 1.2
+module ByStagePart1.S04FailAuthz
+where
+
+data CardDescription = CardDescription with
+    publisher: Party
+    cardText: Text
+  deriving (Eq, Show)
+
+template Card
+    with
+        manager: Party
+        auditor: Party
+        owner: Party
+        description: CardDescription
+    where
+        signatory owner, manager, auditor, description.publisher
+
+testCard: Scenario ()
+testCard = scenario do
+    -- Set up the participants in the marketplace
+    -- Market operator and regulator/auditor
+    manager <- getParty "I want the money"
+    auditor <- getParty "You cant have it"
+    -- Publishers
+    inlandSorc <- getParty "Inland Sorcerers"
+    nineDisc <- getParty "Nine Disc Publishers"
+    -- Gamers
+    alice <- getParty "Alice"
+    bob <- getParty "Bob"
+
+
+    alice `submit` create Card with
+        manager
+        auditor
+        owner = alice
+        description = CardDescription with
+            publisher = inlandSorc
+            cardText = "Win the game"
+
+    pure ()

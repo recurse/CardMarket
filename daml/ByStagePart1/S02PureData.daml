@@ -1,0 +1,10 @@
+{-# LANGUAGE ApplicativeDo #-}
+
+daml 1.2
+module ByStagePart1.S02PureData
+where
+
+data CardDescription = CardDescription with
+    publisher: Party
+    cardText: Text
+  deriving (Eq, Show)
